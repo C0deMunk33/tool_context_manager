@@ -108,7 +108,7 @@ class PoetryDependencyManager:
             return None
 
 
-class FunctionContext:
+class ToolContext:
     def __init__(self, context_name: str, files: List[str], tag: str = "external"):
         self.tagged_functions: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self.initialized_classes: Dict[str, Any] = {}
@@ -458,7 +458,7 @@ class FunctionContext:
         
         return f"Function '{func_name}' not found"
 
-class FunctionContextManager:
+class ToolContextManager:
     def __init__(self):
         self.function_contexts = {}
         self.current_context = None
@@ -468,7 +468,7 @@ class FunctionContextManager:
         print(f"\nInitializing context: {context_name}")
         if context_name in self.function_contexts:
             raise ValueError(f"Context {context_name} already exists.")
-        context = FunctionContext(context_name, files, tag)
+        context = ToolContext(context_name, files, tag)
         
         # Initialize BEFORE printing function list
         await context.initialize()
@@ -549,7 +549,7 @@ class FunctionContextManager:
             files_to_add.append(file_path)
 
         # Create context
-        context = FunctionContext(context_name, files_to_add, tag)
+        context = ToolContext(context_name, files_to_add, tag)
 
         # Initialize BEFORE printing function list
         await context.initialize()
@@ -640,10 +640,10 @@ class FunctionContextManager:
     def set_current_context(self, context_name: str):
         if context_name not in self.function_contexts:
             # create empty context if it doesn't exist
-            self.function_contexts[context_name] = FunctionContext(context_name, [])
+            self.function_contexts[context_name] = ToolContext(context_name, [])
         self.current_context = context_name
 
-    def get_current_context(self) -> FunctionContext:
+    def get_current_context(self) -> ToolContext:
         if self.current_context is None:
             raise ValueError("No current function context set.")
         return self.function_contexts[self.current_context]
@@ -716,7 +716,7 @@ async def main():
     
     test_repo = "https://github.com/C0deMunk33/discord_agent_interface/"
 
-    fcm = FunctionContextManager()
+    fcm = ToolContextManager()
 
     await fcm.create_function_context_from_github("test", test_repo, tag="external", autoload=True)
     
