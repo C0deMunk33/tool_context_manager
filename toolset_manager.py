@@ -22,6 +22,11 @@ import subprocess
 import os
 from typing import Optional
 
+from contextlib import contextmanager
+import sys
+import os
+import importlib.util
+
 class PoetryDependencyManager:
     def __init__(self, repo_path: str):
         self.repo_path = repo_path
@@ -107,14 +112,66 @@ class PoetryDependencyManager:
             os.chdir(original_dir)
             return None
 
+class ModuleState:
+    def __init__(self):
+        self.original_modules = set(sys.modules.keys())
+        self.original_path = sys.path.copy()
+        
+    def get_new_modules(self):
+        current_modules = set(sys.modules.keys())
+        return current_modules - self.original_modules
+        
+    def cleanup(self):
+        # Clean up new modules
+        new_modules = self.get_new_modules()
+        for module_name in new_modules:
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+                
+        # Restore original path
+        sys.path = self.original_path.copy()
+
+class ModuleManager:
+    def __init__(self):
+        self.current_state = None
+        
+    def start_module_tracking(self):
+        """Start tracking module changes"""
+        self.current_state = ModuleState()
+        return self.current_state
+        
+    def cleanup_modules(self):
+        """Clean up tracked modules"""
+        if self.current_state:
+            self.current_state.cleanup()
+            self.current_state = None
+            
+    def load_module_from_file(self, file_path: str):
+        """Load a module from a file path."""
+        try:
+            directory = os.path.dirname(file_path)
+            module_name = os.path.splitext(os.path.basename(file_path))[0]
+            
+            if directory not in sys.path:
+                sys.path.insert(0, directory)
+            
+            spec = importlib.util.spec_from_file_location(module_name, file_path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+            
+            return module
+        except Exception as e:
+            print(f"Error loading module from {file_path}: {str(e)}")
+            return None
 
 class Toolset:
-    def __init__(self, context_name: str, files: List[str], tag: str = "external"):
+    def __init__(self, toolset_name: str, files: List[str], tag: str = "external"):
         self.tagged_functions: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self.initialized_classes: Dict[str, Any] = {}
         self.init_functions: Dict[str, Dict[str, Any]] = {}
         self.class_methods: Dict[str, Dict[str, Dict[str, Any]]] = {}
-        self.context_name = context_name
+        self.toolset_name = toolset_name
         for file in files:
             self.load_tagged_functions(file, tag)
 
@@ -203,13 +260,19 @@ class Toolset:
     def load_tagged_functions(self, file_path: str, tag: str = "external") -> None:
         """Load all tagged functions and class methods from a file."""
         print(f"\nDEBUG: Loading tagged functions from {file_path}")
-        module = self.load_module_from_file(file_path)
-        if not module:
-            print(f"DEBUG: Failed to load module from {file_path}")
-            return
+        
+        module_mgr = ModuleManager()
+        module_mgr.start_module_tracking()
+        try:
+            module = module_mgr.load_module_from_file(file_path)
+            if not module:
+                print(f"DEBUG: Failed to load module from {file_path}")
+                return
 
-        with open(file_path, 'r') as file:
-            tree = ast.parse(file.read())
+            with open(file_path, 'r') as file:
+                tree = ast.parse(file.read())
+        finally:
+            module_mgr.cleanup_modules()
             
         self.add_parent_refs(tree)
         current_class = None
@@ -365,7 +428,7 @@ class Toolset:
                 else:
                     text += f"    * {func_name}: {description}\n"
 
-        text += "    * null: Exit the function context, unless you really need to use a function, err on the side of not.\n"
+        text += "    * null: Exit the function toolset, unless you really need to use a function, err on the side of not.\n"
         return text
 
     def get_function(self, func_name: str, file_path: str = None) -> Dict[str, Any]:
@@ -390,13 +453,12 @@ class Toolset:
 
     async def run_function(self, func_name: str, file_path: str = None, **kwargs):
         """Run a function by name with provided arguments, handling both sync and async functions."""
-        context = self.get_current_context()
-        func_info = context.get_function(func_name, file_path)
+        func_info = self.get_function(func_name, file_path)
         if func_info is None:
             return None
 
         func = func_info['function']
-        if context.is_async_function(func):
+        if self.is_async_function(func):
             return await func(**kwargs)
         else:
             loop = asyncio.get_event_loop()
@@ -460,29 +522,30 @@ class Toolset:
 
 class ToolsetManager:
     def __init__(self):
-        self.function_contexts = {}
-        self.current_context = None
+        self.function_toolsets = {}
+        self.current_toolset = None
         self.repo_dir = "repos"
+        self.module_manager = ModuleManager()
 
-    async def create_function_context(self, context_name: str, files: List[str], tag: str = "external", autoload: bool = True):
-        print(f"\nInitializing context: {context_name}")
-        if context_name in self.function_contexts:
-            raise ValueError(f"Context {context_name} already exists.")
-        context = Toolset(context_name, files, tag)
+    async def create_function_toolset(self, toolset_name: str, files: List[str], tag: str = "external", autoload: bool = True):
+        print(f"\nInitializing toolset: {toolset_name}")
+        if toolset_name in self.function_toolsets:
+            raise ValueError(f"Context {toolset_name} already exists.")
+        toolset = Toolset(toolset_name, files, tag)
         
         # Initialize BEFORE printing function list
-        await context.initialize()
+        await toolset.initialize()
         
-        self.function_contexts[context_name] = context
-        if self.current_context is None or autoload:
-            self.current_context = context_name
+        self.function_toolsets[toolset_name] = toolset
+        if self.current_toolset is None or autoload:
+            self.current_toolset = toolset_name
         
-        print(f"Added function context for {context_name}")
-        print(context.get_function_list_text())
+        print(f"Added function toolset for {toolset_name}")
+        print(toolset.get_function_list_text())
 
-    async def create_function_context_from_github(self, context_name: str, repo: str, tag: str = "external", autoload: bool = True):
-        if context_name in self.function_contexts:
-            raise ValueError(f"Context {context_name} already exists.")
+    async def create_function_toolset_from_github(self, toolset_name: str, repo: str, tag: str = "external", autoload: bool = True):
+        if toolset_name in self.function_toolsets:
+            raise ValueError(f"Context {toolset_name} already exists.")
 
         # Ensure repos directory exists
         os.makedirs(self.repo_dir, exist_ok=True)
@@ -503,7 +566,7 @@ class ToolsetManager:
 
         repo_path = os.path.join(self.repo_dir, f"{owner}_{repo_name}")
 
-        print(f"\nInitializing context {context_name} from GitHub repository {owner}/{repo_name}")
+        print(f"\nInitializing toolset {toolset_name} from GitHub repository {owner}/{repo_name}")
 
         # Clean up existing repo directory if it exists
         if os.path.exists(repo_path):
@@ -548,33 +611,31 @@ class ToolsetManager:
                 raise ValueError(f"Tool file {tool_file} not found in repository")
             files_to_add.append(file_path)
 
-        # Create context
-        context = Toolset(context_name, files_to_add, tag)
+        # Create toolset
+        toolset = Toolset(toolset_name, files_to_add, tag)
 
         # Initialize BEFORE printing function list
-        await context.initialize()
+        await toolset.initialize()
 
-        self.function_contexts[context_name] = context
-        if self.current_context is None or autoload:
-            self.current_context = context_name
+        self.function_toolsets[toolset_name] = toolset
+        if self.current_toolset is None or autoload:
+            self.current_toolset = toolset_name
 
-        print(f"Added function context for {context_name}")
-        print(context.get_function_list_text())
+        print(f"Added function toolset for {toolset_name}")
+        print(toolset.get_function_list_text())
 
-
-
-    async def add_to_current_context(self, files: List[str], tag: str = "external"):
-        if self.current_context is None:
-            raise ValueError("No current function context set.")
-        context = self.get_current_context()
+    async def add_to_current_toolset(self, files: List[str], tag: str = "external"):
+        if self.current_toolset is None:
+            raise ValueError("No current function toolset set.")
+        toolset = self.get_current_toolset()
         for file in files:
-            context.load_tagged_functions(file, tag)
-        await context.initialize()
-        print(context.get_function_list_text())
+            toolset.load_tagged_functions(file, tag)
+        await toolset.initialize()
+        print(toolset.get_function_list_text())
 
-    async def add_to_current_context_from_github(self, repo: str, tag: str = "external"):
-        if self.current_context is None:
-            raise ValueError("No current function context set.")
+    async def add_to_current_toolset_from_github(self, repo: str, tag: str = "external"):
+        if self.current_toolset is None:
+            raise ValueError("No current function toolset set.")
 
         # Ensure repos directory exists
         os.makedirs(self.repo_dir, exist_ok=True)
@@ -632,63 +693,70 @@ class ToolsetManager:
 
             files_to_add.append(file_path)
 
-        # Add file to current context
-        await self.add_to_current_context(files_to_add, tag)
+        # Add file to current toolset
+        await self.add_to_current_toolset(files_to_add, tag)
 
         print(f"Successfully loaded functions from {owner}/{repo_name}")
 
-    def set_current_context(self, context_name: str):
-        if context_name not in self.function_contexts:
-            # create empty context if it doesn't exist
-            self.function_contexts[context_name] = Toolset(context_name, [])
-        self.current_context = context_name
+    def set_current_toolset(self, toolset_name: str):
+        if toolset_name not in self.function_toolsets:
+            # create empty toolset if it doesn't exist
+            self.function_toolsets[toolset_name] = Toolset(toolset_name, [])
+        self.current_toolset = toolset_name
 
-    def get_current_context(self) -> Toolset:
-        if self.current_context is None:
-            raise ValueError("No current function context set.")
-        return self.function_contexts[self.current_context]
+    def get_current_toolset(self) -> Toolset:
+        if self.current_toolset is None:
+            raise ValueError("No current function toolset set.")
+        return self.function_toolsets[self.current_toolset]
     
-    def get_context_names(self) -> List[str]:
-        return list(self.function_contexts.keys())
+    def get_toolset_names(self) -> List[str]:
+        return list(self.function_toolsets.keys())
     
-    def get_current_context_name(self) -> str:
-        return self.current_context
+    def get_current_toolset_name(self) -> str:
+        return self.current_toolset
     
-    def get_current_context_function_list_text(self) -> str:
-        return self.get_current_context().get_function_list_text()
+    def get_current_toolset_function_list_text(self) -> str:
+        return self.get_current_toolset().get_function_list_text()
     
-    def get_current_context_function_grammar(self, func_name: str) -> str:
-        return self.get_current_context().get_function_grammar(func_name)
+    def get_current_toolset_function_grammar(self, func_name: str) -> str:
+        return self.get_current_toolset().get_function_grammar(func_name)
     
     def get_current_arg_format_description(self, func_name: str) -> str:
-        return self.get_current_context().get_function_format_description(func_name)
+        return self.get_current_toolset().get_function_format_description(func_name)
     
     def get_current_function_list_grammar_enum(self) -> str:
         grammar_enum = "("
-        context = self.get_current_context()
-        for func_name in context.tagged_functions.keys():
+        toolset = self.get_current_toolset()
+        for func_name in toolset.tagged_functions.keys():
             grammar_enum += f"\"{func_name}\" |"
         grammar_enum = grammar_enum + " null )"
         return grammar_enum
     
     def get_function(self, func_name: str, file_path: str = None) -> Dict[str, Any]:
-        return self.get_current_context().get_function(func_name, file_path)
+        return self.get_current_toolset().get_function(func_name, file_path)
     
     async def run_function(self, func_name: str, file_path: str = None, **kwargs):
         """Run a function by name with provided arguments, handling both sync and async functions."""
-        context = self.get_current_context()
-        func_info = context.get_function(func_name, file_path)
-        if func_info is None:
-            return None
+        try:
+            self.module_manager.start_module_tracking()
+            toolset = self.get_current_toolset()
+            func_info = toolset.get_function(func_name, file_path)
+            if func_info is None:
+                return None
 
-        func = func_info['function']
-        
-        loop = asyncio.get_event_loop()
+            func = func_info['function']
+            loop = asyncio.get_event_loop()
 
-        if context.is_async_function(func):
-            return await func(**kwargs)
-        else:
-            return await loop.run_in_executor(None, func, **kwargs)
+            if toolset.is_async_function(func):
+                result = await func(**kwargs)
+            else:
+                result = await loop.run_in_executor(None, func, **kwargs)
+                
+            return result
+            
+        finally:
+            self.module_manager.cleanup_modules()
+
 
     def add_function(self, func_pointer):
         # get file, signature, and details from the function pointer
@@ -698,8 +766,8 @@ class ToolsetManager:
         # get the function name
         func_name = func_pointer.__name__
 
-        # add the function to the current context
-        self.get_current_context().tagged_functions[func_name] = {
+        # add the function to the current toolset
+        self.get_current_toolset().tagged_functions[func_name] = {
             file: {
                 'function': func_pointer,
                 'signature': signature,
@@ -718,7 +786,10 @@ async def main():
 
     fcm = ToolsetManager()
 
-    await fcm.create_function_context_from_github("test", test_repo, tag="external", autoload=True)
+    await fcm.create_function_toolset_from_github("test", test_repo, tag="external", autoload=True)
     
+    fcm.set_current_toolset("test")
+    await fcm.run_function("get_discord_channel_list")
+
 if __name__ == "__main__":
     asyncio.run(main())
