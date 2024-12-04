@@ -16,7 +16,8 @@ from git import Repo
 import nest_asyncio
 import asyncio
 
-from common import generate_grammar, generate_format_description
+# Adjust the import path if common.py is in the same directory as toolset_manager.py
+from .common import generate_grammar, generate_format_description
 
 import subprocess
 import os
