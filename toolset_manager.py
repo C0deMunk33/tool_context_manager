@@ -544,10 +544,7 @@ class ToolsetManager:
         print(f"Added function toolset for {toolset_name}")
         print(toolset.get_function_list_text())
 
-    async def create_function_toolset_from_github(self, toolset_name: str, repo: str, tag: str = "external", autoload: bool = True):
-        if toolset_name in self.function_toolsets:
-            raise ValueError(f"Context {toolset_name} already exists.")
-
+    async def create_or_add_function_toolset_from_github(self, toolset_name: str, repo: str, tag: str = "external", autoload: bool = True):
         # Ensure repos directory exists
         os.makedirs(self.repo_dir, exist_ok=True)
         
