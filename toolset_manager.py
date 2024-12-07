@@ -17,7 +17,11 @@ import nest_asyncio
 import asyncio
 
 # Adjust the import path if common.py is in the same directory as toolset_manager.py
-from .common import generate_grammar, generate_format_description
+if os.path.exists("common.py"):
+    from common import generate_grammar, generate_format_description
+else:
+    from .common import generate_grammar, generate_format_description
+
 
 import subprocess
 import os
@@ -780,14 +784,16 @@ nest_asyncio.apply()
 # Example usage
 async def main():
     
-    test_repo = "https://github.com/C0deMunk33/discord_agent_interface/"
+    test_repo = "https://github.com/C0deMunk33/test_toolset/"
 
     fcm = ToolsetManager()
 
-    await fcm.create_function_toolset_from_github("test", test_repo, tag="external", autoload=True)
+    await fcm.create_or_add_function_toolset_from_github("test", test_repo, tag="external", autoload=True)
     
     fcm.set_current_toolset("test")
-    await fcm.run_function("get_discord_channel_list")
+    
+    result = await fcm.run_function("add", a=1, b=2)
+    print(f"Result: {result}")
 
 if __name__ == "__main__":
     asyncio.run(main())
